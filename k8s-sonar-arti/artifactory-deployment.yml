@@ -1,0 +1,108 @@
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: artifactory-pvc
+  namespace: artifactory
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: artifactory
+  namespace: artifactory
+  labels:
+    app: artifactory
+spec:
+  type: LoadBalancer
+  ports:
+  - port: 80
+    targetPort: 8081
+    name: artifactory
+  selector:
+    app: artifactory
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: artifactory
+  namespace: artifactory
+  labels:
+    app: artifactory
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: artifactory
+  template:
+    metadata:
+      labels:
+        app: artifactory
+    spec:
+      securityContext:
+        runAsUser: 1030
+        fsGroup: 1030
+      initContainers:
+      - name: "remove-lost-found"
+        image: "alpine:3.9"
+        command:
+        - 'sh'
+        - '-c'
+        - 'rm -rfv /var/opt/jfrog/artifactory/lost+found'
+        volumeMounts:
+        - name: app-pvc
+          mountPath: "/var/opt/jfrog/artifactory"
+          subPath: artifactory
+      containers:
+      - name: artifactory
+        image: docker.bintray.io/jfrog/artifactory-oss:6.23.13
+        env:
+        - name: DB_TYPE
+          value: postgresql
+        - name: DB_USER
+          value: artifactory
+        - name: DB_PASSWORD
+          value: artifactory
+        - name: DB_HOST
+          value: postgres
+        # Make sure to keep the memory java args aligned with the resources definitions
+        - name: EXTRA_JAVA_OPTIONS
+          value: "-Xms1g -Xmx2g"
+        ports:
+        - containerPort: 8081
+        volumeMounts:
+        - name: app-pvc
+          mountPath: "/var/opt/jfrog/artifactory"
+          subPath: artifactory
+        # Make sure to keep the resources set with values matching EXTRA_JAVA_OPTIONS above
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1"
+        readinessProbe:
+          httpGet:
+            path: '/artifactory/webapp/#/login'
+            port: 8081
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          failureThreshold: 10
+        livenessProbe:
+          httpGet:
+            path: '/artifactory/webapp/#/login'
+            port: 8081
+          initialDelaySeconds: 180
+          periodSeconds: 10
+      volumes:
+      - name: app-pvc
+        persistentVolumeClaim:
+          claimName: artifactory-pvc
+
